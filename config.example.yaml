@@ -1,0 +1,114 @@
+wordpress:
+  url: "https://your-site.example.com"
+  username: ""           # WP username
+  app_password: ""       # Application Password (wp-admin/profile.php → Application Passwords)
+
+dataset:
+  name: "abisee/cnn_dailymail"
+  config: "3.0.0"
+  split: "train"
+  sample_size: 100
+  seed: 42
+  cache_dir: "data/hf_cache"
+
+transform:
+  # How many rows to transform in parallel. Each transform does ~2 LLM calls
+  # (title + category). LM Studio must allow at least this many parallel
+  # requests (Server tab → "Max parallel requests") or they'll queue.
+  # Tune up for beefier hardware; drop to 1 if the local model OOMs.
+  concurrency: 4
+  title:
+    method: "llm"                # llm | first_highlight
+    max_length: 80
+  category:
+    method: "llm"                # llm | random | fixed
+    labels:
+      - News
+      - Politics
+      - Sports
+      - Business
+      - Entertainment
+      - Tech
+      - World
+      - Health
+      - Science
+      - Opinion
+      - Crime
+      - Lifestyle
+      - Travel
+      - Environment
+      - Education
+    ensure_created: true
+  author:
+    method: "pool"
+    # Sample pool. Replace with your own bylines (any length).
+    pool:
+      - "Staff Writer"
+      - "Beat Reporter"
+      - "Copy Editor"
+    prepend_to_content: false    # redundant when create_wp_users is true; flip to true if you need the visible byline
+    create_wp_users: true        # create each pool member as a real WP user and set as post author
+    role: "author"               # WP role assigned to created users
+    email_domain: "newsporter.local"  # placeholder domain for generated user emails
+  date:
+    method: "uniform_random"
+    range_start: "2023-04-17"
+    range_end: "2026-04-16"
+  clean_body:
+    strip_lead_prefixes: true   # strip newswire datelines and byline leads from the article body
+
+  # Combined LLM call: ask the model for { "title": ..., "category": ... }
+  # in a single chat turn instead of two. Roughly halves per-post LLM time.
+  # Falls back to the per-field path automatically when title.method or
+  # category.method is not "llm".
+  combined: false
+
+  # Transform cache: store fully-transformed Posts (title, category, author,
+  # date, body, source_id) keyed by source_id so re-running newsporter against
+  # a different site can skip the LLM entirely. The cache is invalidated
+  # automatically when the model, prompt version, or transform mode changes.
+  # Delete the file to force a clean rebuild.
+  cache:
+    enabled: true
+    path: "data/transforms_cache.jsonl"
+
+# Any OpenAI-compatible server works here: LM Studio, Ollama, llama.cpp server, vLLM, LocalAI, Jan, OpenAI direct, etc.
+# For LM Studio the default base_url is http://127.0.0.1:1234/v1
+# For Ollama it is http://127.0.0.1:11434/v1
+# For OpenAI direct it is https://api.openai.com/v1
+# Check available models with: curl <base_url>/models
+#
+# api_key supports ${ENV_VAR} substitution so secrets stay out of YAML.
+# headers (optional) are sent on every request; useful for proxy endpoints
+# that need a feature flag or tracking header.
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: "not-needed"          # most local servers ignore this
+  model: "google/gemma-4-e4b"
+  timeout: 60
+  temperature: 0.3
+  max_tokens_title: 40
+  max_tokens_category: 8
+
+load:
+  method: "rest_api"
+  # WP REST concurrency. Edge layer can 429 at >~3 req/s, so keep this
+  # conservative; the streaming pipeline feeds posts as transforms finish.
+  concurrency: 4
+  post_status: "publish"
+  retry:
+    attempts: 3
+    backoff_seconds: 2
+  dry_run: false
+
+logging:
+  run_dir: "runs"
+  level: "INFO"
+
+# Estimator for the (future) embedding phase. Not used in phase 1.
+costs:
+  embedding:
+    provider: "openai"
+    model: "text-embedding-3-small"
+    dimensions: 768              # Matryoshka truncation; pick to match your server-side embedding store
+    usd_per_1m_tokens: 0.02

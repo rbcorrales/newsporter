@@ -1,25 +1,50 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-.venv/
-*.egg-info/
-dist/
-build/
+# User config (carries credentials)
+config.yaml
+.env
+.env.*
 
-# Project
+# Python build / packaging
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Project artifacts
 data/
 runs/
-config.yaml
+*.log
 
-# OS
-.DS_Store
-
-# IDE
-.vscode/
-.idea/
-*.swp
+# pyenv
+.python-version

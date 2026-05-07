@@ -1,0 +1,68 @@
+# News dataset pack.
+#
+# Source content is third-party; see the README's "Content and licensing"
+# section for the usual reminders.
+#
+# This preset is dataset-only. Environment settings (wordpress, llm, load
+# concurrency, dry_run, etc.) live in defaults.yaml at the repo root and
+# in your local config.yaml. Run with:
+#   python -m newsporter --preset <name> --dry-run --sample-size 5
+
+source:
+  type: huggingface
+  name: "abisee/cnn_dailymail"
+  config: "3.0.0"
+  split: "train"
+  cache_dir: "data/hf_cache"
+  field_map:
+    id: "id"
+    body: "article"
+    summary: "highlights"
+
+transform:
+  type: llm_synth
+  body_field: "body"
+  summary_field: "summary"
+
+  title:
+    max_length: 80
+
+  category:
+    labels:
+      - News
+      - Politics
+      - Sports
+      - Business
+      - Entertainment
+      - Tech
+      - World
+      - Health
+      - Science
+      - Opinion
+      - Crime
+      - Lifestyle
+      - Travel
+      - Environment
+      - Education
+
+  date:
+    range_start: "2007-04-01"
+    range_end:   "2015-04-30"
+
+  cleaners:
+    # "(CITY) -- " or "WIRE (CNN) -- " prefix.
+    - type: regex_strip
+      pattern: '^(?:[A-Z][A-Z\s,]*\s+)?\(CNN\)\s*(?:--\s*)?'
+    # "By . Author Name . UPDATED: . HH:MM ZZZ, DD Month YYYY ." byline.
+    - type: regex_strip
+      pattern: '^By\s+\.\s+.*?UPDATED:\s+\.\s+\d{1,2}:\d{2}\s+\w+,\s+\d{1,2}\s+\w+\s+\d{4}\s+\.\s+'
+    - type: trim
+
+  author:
+    # Sample pool. Override in config.yaml with your own bylines (any length).
+    pool:
+      - "Staff Writer"
+      - "Beat Reporter"
+      - "Copy Editor"
+
+  max_tokens_combined: 120

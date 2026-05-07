@@ -1,9 +1,9 @@
 # OpenAI API pricing per 1M tokens (USD).
 #
 # Verify against https://openai.com/api/pricing/ when adding models or when
-# rates change. Local servers (LM Studio, Ollama) and the Automattic AI API
-# Proxy are not billed per token, so any model not listed here resolves to
-# $0 cost. Tokens are still recorded regardless.
+# rates change. Models not listed here resolve to $0 cost in summary.json
+# (correct for local servers and other endpoints not billed per token).
+# Tokens are still recorded regardless of pricing presence.
 #
 # Schema: <model_id>: { input: <USD per 1M>, output: <USD per 1M> }
 

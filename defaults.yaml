@@ -1,0 +1,54 @@
+# Sensible environment defaults. Loaded first by the CLI, then overlaid by
+# the chosen preset (dataset pack), then by the user's config.yaml, then by
+# CLI flags. Every value here is overridable.
+
+dataset:
+  seed: 42
+  # sample_size has no safe default; must be set in config.yaml or via
+  # --sample-size on the CLI.
+
+llm:
+  base_url: "https://api.openai.com/v1"
+  api_key: "${OPENAI_API_KEY}"
+  model: "gpt-4o-mini"
+  timeout: 60
+  temperature: 0.3
+
+transform:
+  concurrency: 8
+  cache:
+    enabled: true
+    path: "data/transforms_cache.jsonl"
+
+load:
+  concurrency: 4
+  post_status: "publish"
+  retry:
+    attempts: 3
+    backoff_seconds: 2
+  # Default to dry_run so a missing/typo'd config can never accidentally
+  # upload to a live site. Explicit opt-in with `load.dry_run: false` in
+  # config.yaml or `--live` on the CLI is required to actually post.
+  dry_run: true
+  author:
+    create_wp_users: true
+    prepend_to_content: false
+    role: "author"
+    email_domain: "newsporter.local"
+  # HTTP timeouts (seconds): (connect, read). A hung edge connection
+  # blocks a worker forever otherwise.
+  timeout_connect: 5
+  timeout_read: 30
+
+logging:
+  run_dir: "runs"
+  level: "INFO"
+
+# Cost estimator for the embedding phase. Server-side embedding is a
+# separate process; this is just the budget projection in summary.json.
+costs:
+  embedding:
+    provider: "openai"
+    model: "text-embedding-3-small"
+    dimensions: 768
+    usd_per_1m_tokens: 0.02

@@ -1,0 +1,41 @@
+# JSONL passthrough dataset pack.
+#
+# Reads pre-structured records from a local JSONL file. No LLM call.
+# Useful for migrating an existing corpus into WordPress when the data is
+# already clean (title, content, optional category).
+#
+# Each input line should be a JSON object like:
+#   {"id": "abc123", "title": "...", "content": "...", "category": "News"}
+#
+# This preset is dataset-only. Set wordpress, llm, and per-run knobs in
+# defaults.yaml or your local config.yaml.
+
+source:
+  type: jsonl
+  path: "data/my_corpus.jsonl"
+  field_map:
+    id: "id"
+    title: "title"
+    body: "content"
+    category: "category"
+
+transform:
+  type: passthrough
+  title_field: "title"
+  body_field: "body"
+  category_field: "category"
+
+  # Author and date fall back to these if the source rows don't carry them.
+  author:
+    pool:
+      - "Editor"
+      - "Staff Writer"
+  date:
+    range_start: "2020-01-01"
+    range_end:   "2025-12-31"
+
+  category:
+    labels:
+      - News
+      - Opinion
+      - Other

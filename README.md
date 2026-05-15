@@ -1,6 +1,18 @@
 # Newsporter
 
-Pluggable ETL pipeline that seeds WordPress with synthesized post corpora. Designed so you can swap the source dataset, the per-row transform, or the WP target without touching code. Useful whenever you need a realistic-looking content corpus on a WordPress site for testing, benchmarking, or development.
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](#requirements)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+Pluggable ETL pipeline for seeding WordPress with synthesized post corpora. Swap the source dataset, per row transform, or WordPress target without changing code. Use it for realistic content on test sites, benchmarks, and development environments.
+
+## Requirements
+
+| Requirement | Version or notes |
+|---|---|
+| Python | 3.10 or newer |
+| WordPress target | REST API access with an application password for live runs |
+| OpenAI API key | Required only for `llm_synth` transforms |
+| [`tools/newsporter-meta.php`](tools/newsporter-meta.php) | Recommended for live runs that need source id lookup, cross machine resume, or retry duplicate checks |
 
 ## Install
 
@@ -11,12 +23,12 @@ pip install -e .
 
 The editable install registers the package and the `newsporter` console script. `python -m newsporter` works the same. If you're hacking on the code, `pip install -e .` keeps your edits live without reinstalling.
 
-### One-time WordPress side (for live runs)
+### WordPress helper
 
-Drop [`tools/newsporter-meta.php`](tools/newsporter-meta.php) into the target site's `wp-content/mu-plugins/`. It registers two meta keys (`_newsporter_source_id`, `_newsporter_byline`) so Newsporter can look up existing posts by source id and avoid duplicating on retry.
+Drop [`tools/newsporter-meta.php`](tools/newsporter-meta.php) into the target site's `wp-content/mu-plugins/`. It registers the `_newsporter_source_id` and `_newsporter_byline` meta keys so Newsporter can look up existing posts by source id.
 
 > [!IMPORTANT]
-> Without the mu-plugin installed on the WordPress side, every retry creates a duplicate post. Cross-machine resume becomes impossible too.
+> Without the helper installed on the WordPress side, local resume still works, but WordPress cannot be used as the authority for source id lookups.
 
 ## Quickstart
 

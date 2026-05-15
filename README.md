@@ -30,6 +30,28 @@ Drop [`tools/newsporter-meta.php`](tools/newsporter-meta.php) into the target si
 > [!IMPORTANT]
 > Without the helper installed on the WordPress side, local resume still works, but WordPress cannot be used as the authority for source id lookups.
 
+## Development
+
+Create a virtual environment and install the package in editable mode:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+List available presets:
+
+```bash
+python -m newsporter --list-presets
+```
+
+Run a dry smoke test:
+
+```bash
+python -m newsporter --preset <name> --sample-size 5
+```
+
 ## Quickstart
 
 ```bash

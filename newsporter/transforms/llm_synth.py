@@ -32,13 +32,11 @@ import json
 import random
 import re
 from datetime import datetime, timedelta
-from typing import Optional
 
 from ..llm import LLM
 from ..models import Post, Prefab, RawRow
 from .base import Transformer
 from .cleaners import apply_cleaners
-
 
 _TITLE_PREFIXES = ("headline:", "title:")
 _DATE_YM_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -85,7 +83,7 @@ def _date_iso_from_year_month(
     rng: random.Random,
     min_ym: tuple[int, int],
     max_ym: tuple[int, int],
-) -> Optional[str]:
+) -> str | None:
     """Convert YYYY-MM into a full ISO datetime by picking a random valid
     day (calendar.monthrange handles leap years and 30/31-day months) and
     a random time. Returns None when malformed or outside [min_ym, max_ym]."""
@@ -114,7 +112,7 @@ def _clean_title_output(out: str, max_len: int) -> str:
     out = out.split("\n")[0].strip()
     for prefix in _TITLE_PREFIXES:
         if out.lower().startswith(prefix):
-            out = out[len(prefix):].strip()
+            out = out[len(prefix) :].strip()
             break
     out = out.strip('"').strip("'").strip("*").strip()
     if len(out) > max_len:
@@ -129,9 +127,7 @@ def _title_from_summary(summary: str, max_len: int) -> str:
     return first or "Untitled"
 
 
-def _parse_combined_output(
-    raw: str, labels: list[str], max_title_len: int
-) -> tuple[str, str, str]:
+def _parse_combined_output(raw: str, labels: list[str], max_title_len: int) -> tuple[str, str, str]:
     """Tolerant of fences, leading commentary, missing fields. Returns
     (title, matched_category, date_ym), each possibly empty."""
     text = raw.strip()
@@ -222,11 +218,13 @@ class LLMSynthTransformer(Transformer):
     def _build_prompt(self) -> str:
         win_start = self.range_start[:7]
         win_end = self.range_end[:7]
+
         # str.format treats `{` and `}` as field markers. Labels (or any
         # interpolated value) containing literal braces would crash the
         # call. Escape them.
         def _safe(value: str) -> str:
             return str(value).replace("{", "{{").replace("}", "}}")
+
         return self.prompt_template.format(
             labels=", ".join(_safe(lbl) for lbl in self.labels),
             win_start=_safe(win_start),
@@ -265,21 +263,13 @@ class LLMSynthTransformer(Transformer):
         system = self._build_prompt()
         user = f"Article:\n\n{body[:4000]}\n\nJSON:"
         response_format = (
-            self._structured_response_format()
-            if self.llm.supports_structured_outputs()
-            else None
+            self._structured_response_format() if self.llm.supports_structured_outputs() else None
         )
         raw = self.llm.chat(system, user, self.max_tokens, response_format=response_format)
-        title, category, date_ym = _parse_combined_output(
-            raw, self.labels, self.max_title_len
-        )
+        title, category, date_ym = _parse_combined_output(raw, self.labels, self.max_title_len)
 
         if not title:
-            title = (
-                _title_from_summary(summary, self.max_title_len)
-                if summary
-                else "Untitled"
-            )
+            title = _title_from_summary(summary, self.max_title_len) if summary else "Untitled"
         if not category:
             category = prefab.category_fallback or self.labels[0]
 

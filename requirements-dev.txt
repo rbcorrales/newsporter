@@ -1,0 +1,3 @@
+-r requirements.txt
+ruff>=0.15
+basedpyright>=1.39

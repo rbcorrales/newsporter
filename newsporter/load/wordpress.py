@@ -42,13 +42,12 @@ import re
 import secrets
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 import requests
-import requests.exceptions  # noqa: F401  — surfaced explicitly for clarity
+import requests.exceptions
 
 from ..models import Post
-
 
 log = logging.getLogger("newsporter")
 
@@ -66,7 +65,7 @@ class WordPressUploadError(RuntimeError):
         status: int,
         body_excerpt: str,
         source_id: str = "",
-        headers: Optional[dict] = None,
+        headers: dict | None = None,
     ) -> None:
         # Avoid leaking auth-shaped substrings if a misconfigured WP
         # security plugin echoes the request back.
@@ -100,13 +99,11 @@ def _to_block_content(text: str) -> str:
         escaped = "<br/>".join(html.escape(line) for line in p.splitlines() if line.strip())
         if not escaped:
             continue
-        blocks.append(
-            f"<!-- wp:paragraph -->\n<p>{escaped}</p>\n<!-- /wp:paragraph -->"
-        )
+        blocks.append(f"<!-- wp:paragraph -->\n<p>{escaped}</p>\n<!-- /wp:paragraph -->")
     return "\n\n".join(blocks)
 
 
-def _parse_retry_after(header_value: Optional[str]) -> Optional[float]:
+def _parse_retry_after(header_value: str | None) -> float | None:
     if not header_value:
         return None
     try:
@@ -128,7 +125,9 @@ class WordPressClient:
     """Thread-aware low-level REST client. Each thread gets its own
     Session via threading.local."""
 
-    def __init__(self, cfg: dict, *, timeout_connect: float = 5.0, timeout_read: float = 30.0) -> None:
+    def __init__(
+        self, cfg: dict, *, timeout_connect: float = 5.0, timeout_read: float = 30.0
+    ) -> None:
         if not cfg.get("url"):
             raise ValueError("wordpress.url is required")
         url = cfg["url"].rstrip("/")
@@ -156,7 +155,7 @@ class WordPressClient:
 
     # ── Categories / authors ────────────────────────────────────────
 
-    def _paginated_get(self, path: str, params: Optional[dict] = None) -> list[dict]:
+    def _paginated_get(self, path: str, params: dict | None = None) -> list[dict]:
         """Fetch all pages of a list endpoint. Stops when the page is
         shorter than per_page or X-WP-TotalPages says we're done."""
         out: list[dict] = []
@@ -205,7 +204,7 @@ class WordPressClient:
                 # `term_exists` carries the existing term id we want.
                 try:
                     body = r.json()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     body = {}
                 term_id = (body.get("data") or {}).get("term_id")
                 if r.status_code == 400 and body.get("code") == "term_exists" and term_id:
@@ -241,13 +240,11 @@ class WordPressClient:
                 "first_name": parts[0],
                 "last_name": parts[1] if len(parts) > 1 else "",
             }
-            r = self._session().post(
-                self._url("/users"), json=payload, timeout=self.timeout
-            )
+            r = self._session().post(self._url("/users"), json=payload, timeout=self.timeout)
             if r.status_code >= 400:
                 try:
                     body = r.json()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     body = {}
                 # Adopt existing user when WP rejects the duplicate.
                 if body.get("code") in ("existing_user_login", "existing_user_email"):
@@ -261,15 +258,13 @@ class WordPressClient:
                         if users:
                             mapping[name] = users[0]["id"]
                             continue
-                raise WordPressUploadError(
-                    r.status_code, f"create user '{name}': {r.text}"
-                )
+                raise WordPressUploadError(r.status_code, f"create user '{name}': {r.text}")
             mapping[name] = r.json()["id"]
         return mapping
 
     # ── Posts ──────────────────────────────────────────────────────
 
-    def find_post_id_by_source_id(self, source_id: str) -> Optional[int]:
+    def find_post_id_by_source_id(self, source_id: str) -> int | None:
         """Single-row lookup by `_newsporter_source_id`. Used by the
         retry-recovery path to detect whether a prior POST that returned
         a network error actually succeeded server-side. The bulk
@@ -345,10 +340,7 @@ class WordPressClient:
                 # but some plugin combos (and older WP) return a list of
                 # {key, value} records. Normalize both shapes.
                 if isinstance(meta, list):
-                    meta = {
-                        m.get("key"): m.get("value") for m in meta
-                        if isinstance(m, dict)
-                    }
+                    meta = {m.get("key"): m.get("value") for m in meta if isinstance(m, dict)}
                 elif not isinstance(meta, dict):
                     meta = {}
                 sid = meta.get("_newsporter_source_id")
@@ -367,7 +359,7 @@ class WordPressClient:
         self,
         post: Post,
         category_id: int,
-        author_id: Optional[int],
+        author_id: int | None,
         status: str,
         prepend_byline: bool,
     ) -> tuple[int, requests.Response]:
@@ -401,16 +393,20 @@ class WordPressClient:
             )
         try:
             body = r.json()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise WordPressUploadError(
-                r.status_code, f"non-JSON success body: {e}",
-                source_id=post.source_id, headers=dict(r.headers),
+                r.status_code,
+                f"non-JSON success body: {e}",
+                source_id=post.source_id,
+                headers=dict(r.headers),
             ) from e
         post_id = body.get("id") if isinstance(body, dict) else None
         if not isinstance(post_id, int) or post_id <= 0:
             raise WordPressUploadError(
-                r.status_code, f"missing/invalid post id in success body: {body!r}"[:300],
-                source_id=post.source_id, headers=dict(r.headers),
+                r.status_code,
+                f"missing/invalid post id in success body: {body!r}"[:300],
+                source_id=post.source_id,
+                headers=dict(r.headers),
             )
         return int(post_id), r
 
@@ -448,7 +444,7 @@ class WordPressLoader:
         self.role = author_cfg.get("role", "author")
         self.email_domain = author_cfg.get("email_domain", "newsporter.local")
 
-        self.client: Optional[WordPressClient] = None
+        self.client: WordPressClient | None = None
         self.cat_mapping: dict[str, int] = {}
         self.author_mapping: dict[str, int] = {}
         self.upload_log = upload_log
@@ -490,13 +486,16 @@ class WordPressLoader:
                     only_local = local_set - server_keys
                     only_server = server_keys - local_set
                     differing = {
-                        sid for sid in (local_set & server_keys)
+                        sid
+                        for sid in (local_set & server_keys)
                         if self.existing_post_ids.get(sid) != server_set.get(sid)
                     }
                     if only_local or only_server or differing:
                         log.warning(
                             "Resume drift: only_in_log=%d only_on_wp=%d differing_post_ids=%d",
-                            len(only_local), len(only_server), len(differing),
+                            len(only_local),
+                            len(only_server),
+                            len(differing),
                         )
 
                     if verify_with_wp:
@@ -507,8 +506,7 @@ class WordPressLoader:
                         if self.upload_log is not None:
                             self.upload_log.replace(server_set)
                             log.info(
-                                "Upload log replaced with %d entries from WP "
-                                "(verify-with-wp).",
+                                "Upload log replaced with %d entries from WP (verify-with-wp).",
                                 len(server_set),
                             )
                     else:
@@ -547,8 +545,8 @@ class WordPressLoader:
                 "skipped": True,
             }
 
-        last_err: Optional[Exception] = None
-        last_status: Optional[int] = None
+        last_err: Exception | None = None
+        last_status: int | None = None
         for i in range(self.attempts):
             try:
                 # On retry after a network blip, the previous POST may
@@ -556,10 +554,8 @@ class WordPressLoader:
                 # response. Probe by source_id to avoid duplicating.
                 if i > 0:
                     try:
-                        existing_id = self.client.find_post_id_by_source_id(
-                            post.source_id
-                        )
-                    except Exception:  # noqa: BLE001
+                        existing_id = self.client.find_post_id_by_source_id(post.source_id)
+                    except Exception:
                         existing_id = None
                     if existing_id is not None:
                         with self._existing_lock:
@@ -574,9 +570,7 @@ class WordPressLoader:
                             "recovered_after_retry": True,
                         }
 
-                pid, _ = self.client.create_post(
-                    post, cid, aid, self.status, self.prepend_byline
-                )
+                pid, _ = self.client.create_post(post, cid, aid, self.status, self.prepend_byline)
                 with self._existing_lock:
                     self.existing_post_ids[post.source_id] = pid
                 if self.upload_log is not None:
@@ -587,12 +581,13 @@ class WordPressLoader:
                 last_status = e.status
                 if e.status == 429:
                     ra = _parse_retry_after(e.headers.get("Retry-After"))
-                    sleep_for = ra if ra is not None else (
-                        _DEFAULT_RETRY_AFTER_SECONDS * (2 ** i)
-                    )
+                    sleep_for = ra if ra is not None else (_DEFAULT_RETRY_AFTER_SECONDS * (2**i))
                     log.warning(
                         "WP 429 (attempt %d/%d). Sleeping %.1fs (Retry-After=%s).",
-                        i + 1, self.attempts, sleep_for, ra,
+                        i + 1,
+                        self.attempts,
+                        sleep_for,
+                        ra,
                     )
                     time.sleep(sleep_for)
                     continue
@@ -621,7 +616,7 @@ def purge_all_posts(client: WordPressClient, log: logging.Logger) -> tuple[int, 
     deleted = 0
     failed = 0
     while True:
-        r = client._session().get(  # noqa: SLF001 — internal helper, fine here
+        r = client._session().get(
             client._url("/posts"),
             params={"per_page": 100, "status": "any", "context": "edit"},
             timeout=client.timeout,
@@ -634,7 +629,7 @@ def purge_all_posts(client: WordPressClient, log: logging.Logger) -> tuple[int, 
             break
         progress = 0
         for p in posts:
-            d = client._session().delete(  # noqa: SLF001
+            d = client._session().delete(
                 client._url(f"/posts/{p['id']}"),
                 params={"force": "true"},
                 timeout=client.timeout,

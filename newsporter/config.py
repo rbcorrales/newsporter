@@ -13,7 +13,6 @@ import copy
 import os
 import re
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -65,7 +64,7 @@ def _path_matches(path: tuple[str, ...]) -> bool:
     for allowed in _ENV_SUB_PATHS:
         if len(allowed) != len(path):
             continue
-        if all(a == "*" or a == p for a, p in zip(allowed, path)):
+        if all(a == "*" or a == p for a, p in zip(allowed, path, strict=True)):
             return True
     return False
 
@@ -76,12 +75,12 @@ def _expand_at_path(value, path: tuple[str, ...]):
             return _ENV_VAR_RE.sub(lambda m: os.environ.get(m.group(1), ""), value)
         return value
     if isinstance(value, dict):
-        return {k: _expand_at_path(v, path + (k,)) for k, v in value.items()}
+        return {k: _expand_at_path(v, (*path, k)) for k, v in value.items()}
     if isinstance(value, list):
         # Lists don't get path segments; their elements aren't credential
         # leaves we care about. (If a leaf inside a list ever needs sub,
         # add `(*, idx)` semantics.)
-        return [_expand_at_path(v, path + (None,)) for v in value]  # type: ignore[arg-type]
+        return [_expand_at_path(v, (*path, None)) for v in value]  # type: ignore[arg-type]
     return value
 
 
@@ -89,7 +88,10 @@ def expand_env_vars(cfg: dict) -> dict:
     """Walk the config and substitute `${VAR}` in credential-shaped
     leaves only. Untrusted presets cannot exfiltrate arbitrary env
     vars via prompts, URLs, or other fields."""
-    return _expand_at_path(cfg, ())
+    result = _expand_at_path(cfg, ())
+    # Top-level input is a dict, recursion preserves that at the root.
+    assert isinstance(result, dict)
+    return result
 
 
 def repo_root() -> Path:
@@ -105,12 +107,8 @@ def resolve_preset(name: str) -> Path:
         candidate = base / "presets" / f"{name}.yaml"
         if candidate.exists():
             return candidate
-    available_str = (
-        ", ".join(sorted(set(available))) if available else "(none found)"
-    )
-    raise ConfigError(
-        f"Preset {name!r} not found in presets/. Available: {available_str}"
-    )
+    available_str = ", ".join(sorted(set(available))) if available else "(none found)"
+    raise ConfigError(f"Preset {name!r} not found in presets/. Available: {available_str}")
 
 
 def build_config(args: argparse.Namespace) -> tuple[dict, list[str]]:
@@ -131,7 +129,7 @@ def build_config(args: argparse.Namespace) -> tuple[dict, list[str]]:
         sources.append(str(preset_path))
         cfg["_preset_name"] = args.preset
 
-    user_config_path: Optional[Path] = None
+    user_config_path: Path | None = None
     if args.config:
         user_config_path = Path(args.config)
     elif Path("config.yaml").exists():
@@ -201,6 +199,7 @@ def validate_config(cfg: dict, *, llm_required: bool, source_registry, transform
                 errors.append("source.path is required for type=jsonl.")
             else:
                 from pathlib import Path as _P
+
                 if not _P(source["path"]).exists():
                     errors.append(f"source.path does not exist: {source['path']!r}")
         fmap = source.get("field_map")
@@ -217,13 +216,11 @@ def validate_config(cfg: dict, *, llm_required: bool, source_registry, transform
         )
     elif transform_type not in transform_registry:
         known = ", ".join(sorted(transform_registry))
-        errors.append(
-            f"transform.type={transform_type!r} unknown. Known: {known}."
-        )
+        errors.append(f"transform.type={transform_type!r} unknown. Known: {known}.")
     else:
         # llm_synth has the most config surface — validate eagerly.
         if transform_type == "llm_synth":
-            cat = (transform.get("category") or {})
+            cat = transform.get("category") or {}
             labels = cat.get("labels")
             if not isinstance(labels, list) or not labels:
                 errors.append(
@@ -231,23 +228,17 @@ def validate_config(cfg: dict, *, llm_required: bool, source_registry, transform
                     "for type=llm_synth."
                 )
             elif not all(isinstance(lbl, str) and lbl for lbl in labels):
-                errors.append(
-                    "transform.category.labels must contain non-empty strings only."
-                )
+                errors.append("transform.category.labels must contain non-empty strings only.")
             date_cfg = transform.get("date") or {}
             for key in ("range_start", "range_end"):
                 if not date_cfg.get(key):
-                    errors.append(
-                        f"transform.date.{key} is required for type=llm_synth."
-                    )
+                    errors.append(f"transform.date.{key} is required for type=llm_synth.")
             try:
                 if date_cfg.get("range_start") and date_cfg.get("range_end"):
                     s = _dt.fromisoformat(date_cfg["range_start"])
                     e = _dt.fromisoformat(date_cfg["range_end"])
                     if s > e:
-                        errors.append(
-                            "transform.date.range_start must be <= range_end."
-                        )
+                        errors.append("transform.date.range_start must be <= range_end.")
             except (TypeError, ValueError) as ex:
                 errors.append(f"transform.date.* must be ISO-8601 dates: {ex}")
             cleaners = transform.get("cleaners") or []
@@ -256,9 +247,7 @@ def validate_config(cfg: dict, *, llm_required: bool, source_registry, transform
             else:
                 for i, spec in enumerate(cleaners):
                     if not isinstance(spec, dict) or not spec.get("type"):
-                        errors.append(
-                            f"transform.cleaners[{i}] must be a dict with a 'type' key."
-                        )
+                        errors.append(f"transform.cleaners[{i}] must be a dict with a 'type' key.")
 
     # ── llm (only when transform needs it) ──
     if llm_required:

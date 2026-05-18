@@ -15,7 +15,6 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 import yaml
 from openai import OpenAI
@@ -23,7 +22,7 @@ from openai import OpenAI
 try:
     # Newer SDK names. Fall back gracefully so the import doesn't break
     # users on older clients.
-    from openai import APITimeoutError, RateLimitError, APIConnectionError
+    from openai import APIConnectionError, APITimeoutError, RateLimitError
 except ImportError:  # pragma: no cover
     RateLimitError = APITimeoutError = APIConnectionError = ()  # type: ignore
 
@@ -32,7 +31,7 @@ _log = logging.getLogger("newsporter")
 
 
 class LLM:
-    def __init__(self, cfg: dict, pricing: Optional[dict] = None) -> None:
+    def __init__(self, cfg: dict, pricing: dict | None = None) -> None:
         api_key = cfg.get("api_key") or "not-needed"
         # ${ENV_VAR} substitution keeps secrets out of YAML.
         if isinstance(api_key, str) and api_key.startswith("${") and api_key.endswith("}"):
@@ -63,7 +62,7 @@ class LLM:
         system: str,
         user: str,
         max_tokens: int,
-        response_format: Optional[dict] = None,
+        response_format: dict | None = None,
     ) -> str:
         with self._calls_lock:
             self.calls += 1
@@ -93,7 +92,7 @@ class LLM:
         # Retry loop for transient OpenAI failures. Without this, a single
         # 429 mid-run drops the row for this run; resume picks it up but
         # that's a much heavier recovery path than just waiting.
-        last_err: Optional[Exception] = None
+        last_err: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
                 resp = self.client.chat.completions.create(**kwargs)
@@ -107,13 +106,16 @@ class LLM:
                 # Honor Retry-After header when present, else exponential
                 # backoff with jitter.
                 ra = self._extract_retry_after(e)
-                sleep_for = ra if ra is not None else (
-                    self.retry_base_seconds * (2 ** attempt)
-                    + random.uniform(0, 1)
+                sleep_for = (
+                    ra
+                    if ra is not None
+                    else (self.retry_base_seconds * (2**attempt) + random.uniform(0, 1))
                 )
                 _log.warning(
                     "OpenAI 429 (attempt %d/%d). Sleeping %.1fs.",
-                    attempt + 1, self.max_retries, sleep_for,
+                    attempt + 1,
+                    self.max_retries,
+                    sleep_for,
                 )
                 time.sleep(sleep_for)
             except (APITimeoutError, APIConnectionError) as e:  # type: ignore[misc]
@@ -122,10 +124,13 @@ class LLM:
                     self.retries_timeout += 1
                 if attempt >= self.max_retries:
                     raise
-                sleep_for = self.retry_base_seconds * (2 ** attempt) + random.uniform(0, 1)
+                sleep_for = self.retry_base_seconds * (2**attempt) + random.uniform(0, 1)
                 _log.warning(
                     "OpenAI %s (attempt %d/%d). Sleeping %.1fs.",
-                    type(e).__name__, attempt + 1, self.max_retries, sleep_for,
+                    type(e).__name__,
+                    attempt + 1,
+                    self.max_retries,
+                    sleep_for,
                 )
                 time.sleep(sleep_for)
         else:  # pragma: no cover  — only hit if the loop fails to break
@@ -147,7 +152,7 @@ class LLM:
         return (getattr(msg, "content", None) or "").strip()
 
     @staticmethod
-    def _extract_retry_after(err) -> Optional[float]:
+    def _extract_retry_after(err) -> float | None:
         """Pull a Retry-After hint out of a RateLimitError, if the SDK
         attached the response headers. Returns None when unavailable."""
         resp = getattr(err, "response", None)
@@ -191,7 +196,8 @@ class LLM:
         rates = self.pricing.get(self.model) or self.pricing.get(model_lc) or {}
         if not rates:
             prefixes = [
-                k for k in self.pricing
+                k
+                for k in self.pricing
                 if model_lc == k.lower() or model_lc.startswith(k.lower() + "-")
             ]
             if prefixes:

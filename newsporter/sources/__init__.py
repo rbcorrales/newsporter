@@ -26,4 +26,4 @@ def build_source(cfg: dict) -> Source:
     return SOURCE_REGISTRY[source_type](cfg)
 
 
-__all__ = ["Source", "SOURCE_REGISTRY", "build_source"]
+__all__ = ["SOURCE_REGISTRY", "Source", "build_source"]

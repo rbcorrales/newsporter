@@ -12,6 +12,12 @@ class Source(ABC):
     """Yields RawRows. Concrete subclasses configure themselves from the
     `source:` block of the active config."""
 
+    def __init__(self, cfg: dict) -> None:
+        """Registry contract: every Source is instantiated with the `source:`
+        block. Subclasses can override to do their own validation and
+        attribute extraction."""
+        self.cfg = cfg
+
     @abstractmethod
     def fetch(self, sample_size: int, seed: int) -> list[RawRow]:
         """Return up to `sample_size` rows. `seed` controls deterministic

@@ -22,7 +22,9 @@ from .base import Transformer
 class PassthroughTransformer(Transformer):
     SCHEMA_VERSION = "v1-passthrough"
 
-    def __init__(self, cfg: dict, llm=None) -> None:  # llm unused, accepted for symmetry
+    def __init__(self, cfg: dict, llm=None, *, source_identity: str = "") -> None:
+        # llm + source_identity are accepted for registry-uniform dispatch; passthrough doesn't use them.
+        super().__init__(cfg, llm, source_identity=source_identity)
         self.title_field = cfg.get("title_field", "title")
         self.body_field = cfg.get("body_field", "body")
         self.category_field = cfg.get("category_field")  # may be None

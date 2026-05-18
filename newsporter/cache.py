@@ -14,7 +14,6 @@ import logging
 import threading
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
 
 from .models import Post
 
@@ -61,7 +60,7 @@ class TransformCache:
             self.path,
         )
 
-    def get(self, source_id: str) -> Optional[Post]:
+    def get(self, source_id: str) -> Post | None:
         # Lock the read too. CPython's GIL makes single-key dict.get
         # effectively atomic today, but free-threaded builds (3.13+
         # PEP 703) remove that guarantee. The lock is uncontended on the

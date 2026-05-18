@@ -12,17 +12,18 @@ Example config:
 from __future__ import annotations
 
 import re
-from typing import Callable
-
+from collections.abc import Callable
 
 _CLEANERS: dict[str, Callable[[str, dict], str]] = {}
 
 
 def cleaner(name: str):
     """Decorator: register a cleaner under its config `type:` value."""
+
     def deco(fn: Callable[[str, dict], str]) -> Callable[[str, dict], str]:
         _CLEANERS[name] = fn
         return fn
+
     return deco
 
 
@@ -67,11 +68,11 @@ def apply_cleaners(text: str, cleaner_specs: list[dict]) -> str:
     so a typo in config doesn't silently no-op."""
     for spec in cleaner_specs or []:
         ctype = spec.get("type")
+        if not isinstance(ctype, str):
+            raise ValueError(f"Cleaner spec missing `type` (got {ctype!r}).")
         fn = _CLEANERS.get(ctype)
         if fn is None:
             known = ", ".join(sorted(_CLEANERS))
-            raise ValueError(
-                f"Unknown cleaner type {ctype!r}. Known: {known}."
-            )
+            raise ValueError(f"Unknown cleaner type {ctype!r}. Known: {known}.")
         text = fn(text, spec)
     return text

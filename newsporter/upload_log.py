@@ -21,7 +21,6 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Optional
 
 
 class UploadLog:
@@ -57,7 +56,7 @@ class UploadLog:
             self.path,
         )
 
-    def get(self, source_id: str) -> Optional[int]:
+    def get(self, source_id: str) -> int | None:
         with self._lock:
             return self._by_source.get(source_id)
 
@@ -71,9 +70,7 @@ class UploadLog:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 self._fh = self.path.open("a", encoding="utf-8")
             self._by_source[source_id] = post_id
-            self._fh.write(
-                json.dumps({"source_id": source_id, "post_id": post_id}) + "\n"
-            )
+            self._fh.write(json.dumps({"source_id": source_id, "post_id": post_id}) + "\n")
             self._fh.flush()
 
     def replace(self, mapping: dict[str, int]) -> int:
@@ -81,7 +78,9 @@ class UploadLog:
         provided mapping. Stale entries (locally-tracked posts that no
         longer exist on WP) get dropped. Returns the count written."""
         with self._lock:
-            self._by_source = {str(k): int(v) for k, v in mapping.items() if isinstance(v, int) and v > 0}
+            self._by_source = {
+                str(k): int(v) for k, v in mapping.items() if isinstance(v, int) and v > 0
+            }
             if self._fh is not None:
                 self._fh.close()
                 self._fh = None
@@ -120,9 +119,7 @@ class UploadLog:
                     continue
                 if self._by_source.get(sid) != pid:
                     self._by_source[sid] = pid
-                    self._fh.write(
-                        json.dumps({"source_id": sid, "post_id": pid}) + "\n"
-                    )
+                    self._fh.write(json.dumps({"source_id": sid, "post_id": pid}) + "\n")
                     new_count += 1
             self._fh.flush()
         return new_count

@@ -3,8 +3,6 @@ registering its `type:` discriminator string."""
 
 from __future__ import annotations
 
-from typing import Optional
-
 from ..llm import LLM
 from .base import Transformer
 from .llm_synth import LLMSynthTransformer
@@ -19,9 +17,7 @@ TRANSFORM_REGISTRY: dict[str, type[Transformer]] = {
 LLM_REQUIRED: set[str] = {"llm_synth"}
 
 
-def build_transformer(
-    cfg: dict, llm: Optional[LLM], source_identity: str = ""
-) -> Transformer:
+def build_transformer(cfg: dict, llm: LLM | None, source_identity: str = "") -> Transformer:
     transform_type = cfg.get("type")
     if transform_type not in TRANSFORM_REGISTRY:
         known = ", ".join(sorted(TRANSFORM_REGISTRY))
@@ -32,11 +28,9 @@ def build_transformer(
     cls = TRANSFORM_REGISTRY[transform_type]
     if transform_type in LLM_REQUIRED:
         if llm is None:
-            raise ValueError(
-                f"Transform type {transform_type!r} requires an `llm:` block."
-            )
+            raise ValueError(f"Transform type {transform_type!r} requires an `llm:` block.")
         return cls(cfg, llm, source_identity=source_identity)
     return cls(cfg)
 
 
-__all__ = ["Transformer", "TRANSFORM_REGISTRY", "LLM_REQUIRED", "build_transformer"]
+__all__ = ["LLM_REQUIRED", "TRANSFORM_REGISTRY", "Transformer", "build_transformer"]

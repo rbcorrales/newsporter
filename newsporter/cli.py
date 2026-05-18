@@ -19,12 +19,11 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from tqdm import tqdm
 
 from .cache import TransformCache
-from .config import ConfigError, build_config, repo_root
+from .config import ConfigError, build_config, repo_root, validate_config
 from .llm import LLM, load_pricing
 from .load.wordpress import WordPressClient, WordPressLoader, purge_all_posts
 from .models import Post
@@ -32,7 +31,6 @@ from .pipeline import run_pipeline
 from .sources import SOURCE_REGISTRY, build_source
 from .transforms import LLM_REQUIRED, TRANSFORM_REGISTRY, build_transformer
 from .upload_log import UploadLog
-from .config import validate_config
 
 
 class _TqdmLoggingHandler(logging.Handler):
@@ -42,11 +40,11 @@ class _TqdmLoggingHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             tqdm.write(self.format(record), file=sys.stderr)
-        except Exception:  # noqa: BLE001
+        except Exception:
             self.handleError(record)
 
 
-def _setup_logging(level: str, run_dir: Optional[Path] = None) -> logging.Logger:
+def _setup_logging(level: str, run_dir: Path | None = None) -> logging.Logger:
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
@@ -64,7 +62,7 @@ def _setup_logging(level: str, run_dir: Optional[Path] = None) -> logging.Logger
     return logging.getLogger("newsporter")
 
 
-def _git_sha() -> Optional[str]:
+def _git_sha() -> str | None:
     try:
         out = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -74,7 +72,7 @@ def _git_sha() -> Optional[str]:
             timeout=2,
         ).strip()
         return out or None
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -102,10 +100,10 @@ def _write_summary(
     posts: list[Post],
     results: list[dict],
     elapsed_sec: float,
-    chat_cost: Optional[dict],
+    chat_cost: dict | None,
     embedding_estimate: dict,
     llm_calls: int,
-    cache_stats: Optional[dict] = None,
+    cache_stats: dict | None = None,
 ) -> dict:
     summary = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -124,9 +122,7 @@ def _write_summary(
         "posts_failed": sum(1 for r in results if r.get("ok") is False),
         "llm_calls": llm_calls,
         "elapsed_sec": round(elapsed_sec, 2),
-        "pace_sec_per_post": (
-            round(elapsed_sec / len(posts), 4) if posts else None
-        ),
+        "pace_sec_per_post": (round(elapsed_sec / len(posts), 4) if posts else None),
         "transform_concurrency": int((cfg.get("transform") or {}).get("concurrency", 4)),
         "upload_concurrency": int((cfg.get("load") or {}).get("concurrency", 4)),
     }
@@ -172,9 +168,7 @@ def _purge_command(cfg: dict, log: logging.Logger, assume_yes: bool) -> int:
 
     # Local upload log must follow server state or the next run will
     # silently skip rows that no longer exist on WP.
-    upload_log_path = Path(
-        (cfg.get("load") or {}).get("upload_log_path", "data/uploads.jsonl")
-    )
+    upload_log_path = Path((cfg.get("load") or {}).get("upload_log_path", "data/uploads.jsonl"))
     if upload_log_path.exists():
         ul = UploadLog(upload_log_path, log)
         ul.truncate()
@@ -186,8 +180,8 @@ def _purge_command(cfg: dict, log: logging.Logger, assume_yes: bool) -> int:
 def _positive_int(value: str) -> int:
     try:
         n = int(value)
-    except (TypeError, ValueError):
-        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value!r}")
+    except (TypeError, ValueError) as e:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value!r}") from e
     if n < 1:
         raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
     return n
@@ -195,6 +189,7 @@ def _positive_int(value: str) -> int:
 
 def main() -> int:
     from . import __version__
+
     parser = argparse.ArgumentParser(
         prog="newsporter",
         description="Pluggable ETL pipeline that loads a corpus into WordPress.",
@@ -218,9 +213,7 @@ def main() -> int:
     )
 
     runknobs = parser.add_argument_group("Run knobs")
-    runknobs.add_argument(
-        "--sample-size", type=_positive_int, help="Override dataset.sample_size"
-    )
+    runknobs.add_argument("--sample-size", type=_positive_int, help="Override dataset.sample_size")
     runknobs.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -235,14 +228,14 @@ def main() -> int:
         "--no-resume-check",
         action="store_true",
         help="Skip the resume check entirely. Use when uploading to a "
-             "known-empty site, or to force a fresh upload of every row.",
+        "known-empty site, or to force a fresh upload of every row.",
     )
     resume.add_argument(
         "--verify-with-wp",
         action="store_true",
         help="Cross-check the local upload log against WordPress and "
-             "REPLACE the log with WP's authoritative state. Use after "
-             "wp-admin deletions or cross-machine handoffs.",
+        "REPLACE the log with WP's authoritative state. Use after "
+        "wp-admin deletions or cross-machine handoffs.",
     )
 
     maint = parser.add_argument_group("Maintenance")
@@ -250,8 +243,8 @@ def main() -> int:
         "--purge",
         action="store_true",
         help="DESTRUCTIVE: delete every post on the target WP site, "
-             "clear the local upload log, then exit. Prompts for URL "
-             "confirmation unless --yes is also passed.",
+        "clear the local upload log, then exit. Prompts for URL "
+        "confirmation unless --yes is also passed.",
     )
     maint.add_argument(
         "--yes",
@@ -320,7 +313,7 @@ def main() -> int:
     # ── Wire components ───────────────────────────────────────────────
     pricing = load_pricing(repo_root() / "pricing.yaml")
 
-    llm: Optional[LLM] = None
+    llm: LLM | None = None
     if needs_llm:
         llm = LLM(cfg["llm"], pricing=pricing)
         log.info("LLM: %s @ %s", cfg["llm"]["model"], cfg["llm"]["base_url"])
@@ -346,19 +339,15 @@ def main() -> int:
     transformer = build_transformer(transform_cfg, llm, source_identity=source_identity)
 
     labels: list[str] = list(((transform_cfg.get("category") or {}).get("labels")) or [])
-    transform_author = (transform_cfg.get("author") or {})
-    load_author = ((cfg.get("load") or {}).get("author") or {})
-    author_pool: list[str] = list(
-        transform_author.get("pool") or load_author.get("pool") or []
-    )
+    transform_author = transform_cfg.get("author") or {}
+    load_author = (cfg.get("load") or {}).get("author") or {}
+    author_pool: list[str] = list(transform_author.get("pool") or load_author.get("pool") or [])
 
     # Upload log is opt-out via --no-resume-check. Path is configurable
     # via load.upload_log_path, defaults to data/uploads.jsonl.
-    upload_log: Optional[UploadLog] = None
+    upload_log: UploadLog | None = None
     if not args.no_resume_check:
-        upload_log_path = Path(
-            (cfg.get("load") or {}).get("upload_log_path", "data/uploads.jsonl")
-        )
+        upload_log_path = Path((cfg.get("load") or {}).get("upload_log_path", "data/uploads.jsonl"))
         upload_log = UploadLog(upload_log_path, log)
 
     loader = WordPressLoader(
@@ -377,8 +366,8 @@ def main() -> int:
         )
 
     # ── Cache ─────────────────────────────────────────────────────────
-    cache: Optional[TransformCache] = None
-    cache_cfg = (transform_cfg.get("cache") or {})
+    cache: TransformCache | None = None
+    cache_cfg = transform_cfg.get("cache") or {}
     if cache_cfg.get("enabled"):
         cache_path = Path(cache_cfg.get("path") or "data/transforms_cache.jsonl")
         cache = TransformCache(cache_path, transformer.signature(), log)
@@ -387,9 +376,7 @@ def main() -> int:
     log.info("Run ID: %s  dry_run=%s", run_id, loader.dry_run)
     t0 = time.monotonic()
     try:
-        posts, results = run_pipeline(
-            source, transformer, loader, cfg, log, run_dir, cache
-        )
+        posts, results = run_pipeline(source, transformer, loader, cfg, log, run_dir, cache)
     finally:
         if cache is not None:
             cache.close()
@@ -419,8 +406,15 @@ def main() -> int:
 
     cache_stats = cache.stats() if cache is not None else None
     summary = _write_summary(
-        run_dir, cfg, posts, results, elapsed,
-        chat_cost, embedding_est, llm.calls if llm else 0, cache_stats,
+        run_dir,
+        cfg,
+        posts,
+        results,
+        elapsed,
+        chat_cost,
+        embedding_est,
+        llm.calls if llm else 0,
+        cache_stats,
     )
     log.info(
         "Done in %.1fs. Prepared=%d uploaded=%d skipped=%d failed=%d llm_calls=%d",

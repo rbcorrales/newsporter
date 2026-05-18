@@ -52,6 +52,24 @@ Run a dry smoke test:
 python -m newsporter --preset <name> --sample-size 5
 ```
 
+### Lint + type checks
+
+Install the dev tools (Ruff + basedpyright) once:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+Run before committing:
+
+```bash
+ruff check .
+ruff format --check .
+basedpyright
+```
+
+Tool configs live in `pyproject.toml` under `[tool.ruff]` and `[tool.basedpyright]`. There is no CI yet — run these locally before pushing.
+
 ## Quickstart
 
 ```bash

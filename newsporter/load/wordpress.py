@@ -358,7 +358,7 @@ class WordPressClient:
                     sids[str(sid)] = pid
                 chash = meta.get("_newsporter_content_hash")
                 if chash:
-                    hashes[str(chash)] = pid
+                    hashes.setdefault(str(chash), pid)
             total_pages = int(r.headers.get("X-WP-TotalPages") or 1)
             if page >= total_pages or len(items) < per_page:
                 break
@@ -529,7 +529,11 @@ class WordPressLoader:
                         "(can take a few minutes on large sites)..."
                     )
                     server_set, server_hashes = self.client.list_metas()
-                    self.existing_content_hashes = dict(server_hashes)
+                    if verify_with_wp:
+                        self.existing_content_hashes = dict(server_hashes)
+                    else:
+                        for chash, pid in server_hashes.items():
+                            self.existing_content_hashes.setdefault(chash, pid)
                     if server_hashes:
                         log.info(
                             "Loaded %d content hashes from WP for cross-run dedup.",

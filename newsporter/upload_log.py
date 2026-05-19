@@ -180,7 +180,8 @@ class UploadLog:
                     continue
                 chash = pid_to_hash.get(pid, "")
                 changed_source = self._by_source.get(sid) != pid
-                changed_hash = bool(chash) and self._by_hash.get(chash) != pid
+                existing_hash_pid = self._by_hash.get(chash) if chash else None
+                changed_hash = bool(chash) and existing_hash_pid is None
                 if not (changed_source or changed_hash):
                     continue
                 self._by_source[sid] = pid

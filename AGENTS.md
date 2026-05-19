@@ -33,7 +33,7 @@ Four independent layers, each catches different failure modes:
 Authority order on resume:
 
 - Local log is trusted by default.
-- `--verify-with-wp` does a bulk WP fetch via `list_source_ids`, REPLACES the local log with WP's authoritative state, and reports drift counts (`only_in_log`, `only_on_wp`, `differing_post_ids`) to `run.log`. Use after wp-admin deletions or cross-machine handoffs.
+- `--verify-with-wp` does a bulk WP fetch via `list_metas`, REPLACES the local log with WP's authoritative state, and reports drift counts (`only_in_log`, `only_on_wp`, `differing_post_ids`) to `run.log`. Use after wp-admin deletions or cross-machine handoffs.
 - `--purge` deletes all posts on the WP site AND truncates the local upload log so the next run is consistent.
 - `--no-resume-check` skips both paths (force-fresh upload).
 

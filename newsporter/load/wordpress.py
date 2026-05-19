@@ -268,7 +268,7 @@ class WordPressClient:
         """Single-row lookup by `_newsporter_source_id`. Used by the
         retry-recovery path to detect whether a prior POST that returned
         a network error actually succeeded server-side. The bulk
-        startup fetch (`list_source_ids`) is the primary idempotency
+        startup fetch (`list_metas`) is the primary idempotency
         path; this is the in-flight safety net."""
         try:
             r = self._session().get(

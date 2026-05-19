@@ -292,17 +292,20 @@ class WordPressClient:
             return int(pid) if isinstance(pid, int) and pid > 0 else None
         return None
 
-    def list_source_ids(self) -> dict[str, int]:
-        """Bulk fetch every `_newsporter_source_id` already on the site,
-        mapped to its post id. Used at startup so the pipeline can
-        filter out already-uploaded rows in O(1) memory lookups instead
-        of N REST roundtrips. Requires the meta key to be registered
-        with `show_in_rest: true` on the WP side.
+    def list_metas(self) -> tuple[dict[str, int], dict[str, int]]:
+        """Bulk fetch `_newsporter_source_id` AND `_newsporter_content_hash`
+        from every post on the site in a single paginated scan. Returns
+        `(source_id_to_post_id, content_hash_to_post_id)`. One traversal
+        instead of two; large corpora make REST roundtrips the dominant
+        cost here.
 
-        Returns an empty dict on any error (caller treats absence as
-        "no idempotency available, behave like a fresh upload").
+        Both meta keys must be registered with `show_in_rest: true` on
+        the WP side (see `tools/newsporter-meta.php`). Returns empty
+        dicts on any error (caller treats absence as "no idempotency
+        available, behave like a fresh upload").
         """
-        out: dict[str, int] = {}
+        sids: dict[str, int] = {}
+        hashes: dict[str, int] = {}
         page = 1
         per_page = 100
         while True:
@@ -322,7 +325,7 @@ class WordPressClient:
                 requests.exceptions.ConnectionError,
                 requests.exceptions.Timeout,
             ):
-                return out
+                return sids, hashes
             if r.status_code >= 400:
                 # 400 with rest_post_invalid_page_number = past the end.
                 if r.status_code == 400 and "rest_post_invalid_page_number" in r.text:
@@ -330,7 +333,7 @@ class WordPressClient:
                 # Anything else: bail with what we have. The pipeline
                 # will fall back to per-create with no idempotency,
                 # which still works (just slower / not duplicate-safe).
-                return out
+                return sids, hashes
             items = r.json()
             if not isinstance(items, list) or not items:
                 break
@@ -343,17 +346,30 @@ class WordPressClient:
                     meta = {m.get("key"): m.get("value") for m in meta if isinstance(m, dict)}
                 elif not isinstance(meta, dict):
                     meta = {}
-                sid = meta.get("_newsporter_source_id")
                 pid = it.get("id")
+                if not (isinstance(pid, int) and pid > 0):
+                    continue
+                sid = meta.get("_newsporter_source_id")
                 # Be explicit: "0" and 0 are valid source_ids and must
                 # not be silently dropped by a truthy check.
-                if sid is not None and sid != "" and isinstance(pid, int) and pid > 0:
-                    out[str(sid)] = pid
+                if sid is not None and sid != "":
+                    sids[str(sid)] = pid
+                chash = meta.get("_newsporter_content_hash")
+                if chash:
+                    hashes[str(chash)] = pid
             total_pages = int(r.headers.get("X-WP-TotalPages") or 1)
             if page >= total_pages or len(items) < per_page:
                 break
             page += 1
-        return out
+        return sids, hashes
+
+    def list_source_ids(self) -> dict[str, int]:
+        """Backward-compatible wrapper around `list_metas`. Returns just
+        the source-id index. Prefer `list_metas` when both indices are
+        needed in the same startup pass.
+        """
+        sids, _ = self.list_metas()
+        return sids
 
     def create_post(
         self,
@@ -382,6 +398,10 @@ class WordPressClient:
             "meta": {
                 "_newsporter_source_id": post.source_id,
                 "_newsporter_byline": post.author,
+                # Empty string when the body field is missing/empty; WP
+                # treats that the same as "no value" for sanitize_text_field,
+                # so the row just won't surface in the content-hash index.
+                "_newsporter_content_hash": post.content_hash,
             },
         }
         if author_id is not None:
@@ -454,7 +474,29 @@ class WordPressLoader:
         # `_existing_lock` as new uploads complete, so concurrent
         # workers in the same run don't race to create duplicates.
         self.existing_post_ids: dict[str, int] = {}
+        # content_hash → post_id, for catching upstream-dataset duplicates
+        # (same article under multiple source_ids). Populated from the
+        # local upload log on warm resume, replaced/augmented by the WP
+        # bulk fetch when it runs.
+        self.existing_content_hashes: dict[str, int] = {}
         self._existing_lock = threading.Lock()
+        # Counters surfaced to summary.json by the pipeline. Owned here
+        # rather than passed through return values so the loader stays
+        # the single source of truth for upload-side stats.
+        self.dedup_stats: dict[str, int] = {
+            "cross_run": 0,
+            "within_run": 0,
+            "empty_hash": 0,
+        }
+        # Row-funnel counters. Lets summary.json show the true number of
+        # rows that came back from source.fetch() (pre-filter) alongside
+        # what survived each successive skip. Without these, post-filter
+        # counts hide both source-ID resume skips and content-hash skips.
+        self.pipeline_stats: dict[str, int] = {
+            "rows_fetched": 0,
+            "rows_after_source_id_resume": 0,
+            "rows_after_content_dedup": 0,
+        }
 
         if self.dry_run:
             self.cat_mapping = {lbl: 1000 + i for i, lbl in enumerate(labels)}
@@ -473,12 +515,24 @@ class WordPressLoader:
                 # or when the operator explicitly asks for verification.
                 if self.upload_log is not None:
                     self.existing_post_ids = self.upload_log.all()
+                    # Seed cross-run content-hash dedup from the local log
+                    # on the warm path. The WP bulk fetch below replaces
+                    # or augments this when it runs, but if the log is
+                    # already populated AND verify_with_wp is False, this
+                    # is the only source of cross-run hash protection.
+                    self.existing_content_hashes = self.upload_log.all_hashes()
                 if verify_with_wp or not self.existing_post_ids:
                     log.info(
                         "Cross-checking already-uploaded source_ids against WP "
                         "(can take a few minutes on large sites)..."
                     )
-                    server_set = self.client.list_source_ids()
+                    server_set, server_hashes = self.client.list_metas()
+                    self.existing_content_hashes = dict(server_hashes)
+                    if server_hashes:
+                        log.info(
+                            "Loaded %d content hashes from WP for cross-run dedup.",
+                            len(server_hashes),
+                        )
 
                     # Drift report: what does WP say vs our local log?
                     local_set = set(self.existing_post_ids)
@@ -504,7 +558,7 @@ class WordPressLoader:
                         # (deletes, machine swaps) get pruned.
                         self.existing_post_ids = dict(server_set)
                         if self.upload_log is not None:
-                            self.upload_log.replace(server_set)
+                            self.upload_log.replace(server_set, server_hashes)
                             log.info(
                                 "Upload log replaced with %d entries from WP (verify-with-wp).",
                                 len(server_set),
@@ -515,7 +569,7 @@ class WordPressLoader:
                         # disagree with).
                         self.existing_post_ids.update(server_set)
                         if self.upload_log is not None and server_set:
-                            self.upload_log.merge(server_set)
+                            self.upload_log.merge(server_set, server_hashes)
 
     def upload(self, post: Post) -> dict:
         if self.dry_run:
@@ -560,8 +614,12 @@ class WordPressLoader:
                     if existing_id is not None:
                         with self._existing_lock:
                             self.existing_post_ids[post.source_id] = existing_id
+                            if post.content_hash:
+                                self.existing_content_hashes.setdefault(
+                                    post.content_hash, existing_id
+                                )
                         if self.upload_log is not None:
-                            self.upload_log.put(post.source_id, existing_id)
+                            self.upload_log.put(post.source_id, existing_id, post.content_hash)
                         return {
                             "source_id": post.source_id,
                             "post_id": existing_id,
@@ -573,8 +631,14 @@ class WordPressLoader:
                 pid, _ = self.client.create_post(post, cid, aid, self.status, self.prepend_byline)
                 with self._existing_lock:
                     self.existing_post_ids[post.source_id] = pid
+                    if post.content_hash:
+                        # setdefault: keep whichever post landed first as
+                        # the "canonical" id for this content. Later writes
+                        # with the same hash shouldn't have reached this
+                        # point (pipeline filters them) but guard anyway.
+                        self.existing_content_hashes.setdefault(post.content_hash, pid)
                 if self.upload_log is not None:
-                    self.upload_log.put(post.source_id, pid)
+                    self.upload_log.put(post.source_id, pid, post.content_hash)
                 return {"source_id": post.source_id, "post_id": pid, "ok": True}
             except WordPressUploadError as e:
                 last_err = e

@@ -300,9 +300,11 @@ class WordPressClient:
         cost here.
 
         Both meta keys must be registered with `show_in_rest: true` on
-        the WP side (see `tools/newsporter-meta.php`). Returns empty
-        dicts on any error (caller treats absence as "no idempotency
-        available, behave like a fresh upload").
+        the WP side (see `tools/newsporter-meta.php`). If a request fails
+        mid-scan, returns whatever entries were collected so far; if the
+        first request fails, both dicts will be empty. Callers should
+        treat missing entries as "no idempotency available, behave like a
+        fresh upload".
         """
         sids: dict[str, int] = {}
         hashes: dict[str, int] = {}

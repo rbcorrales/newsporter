@@ -104,8 +104,9 @@ def run_pipeline(
     # ships the same article under multiple row IDs (HuggingFace mirrors,
     # syndicated news, etc.) — source-ID dedup is blind to it because
     # the IDs differ. Skipped on dry-run (no point spending compute on a
-    # filter we won't use) and when the loader didn't surface a known-
-    # hashes set (warm-resume path with no WP bulk fetch).
+    # filter we won't use). If the loader didn't surface a known-hashes
+    # set (warm-resume path with no WP bulk fetch), cross-run dedup is a
+    # no-op, but within-run dedup still runs and `row.content_hash` is set.
     transform_cfg_for_body = cfg.get("transform") or {}
     body_field = str(transform_cfg_for_body.get("body_field") or "body")
     dedup_enabled = bool(dataset_cfg.get("dedup_content", True))

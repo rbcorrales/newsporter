@@ -19,6 +19,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from .cache import TransformCache
+from .dedup import content_hash_for
 from .load.wordpress import WordPressLoader
 from .models import Post, Prefab, RawRow
 from .sources.base import Source
@@ -77,6 +78,8 @@ def run_pipeline(
     log.info("Extracting up to %d rows", sample_size or 0)
     rows = source.fetch(sample_size, seed)
     log.info("Fetched %d rows", len(rows))
+    if hasattr(loader, "pipeline_stats"):
+        loader.pipeline_stats["rows_fetched"] = len(rows)
 
     # Resume optimisation: if the loader already knows about posts on
     # the target site (via WP-side `_newsporter_source_id` lookup), skip
@@ -94,6 +97,77 @@ def run_pipeline(
                 before,
                 len(rows),
             )
+    if hasattr(loader, "pipeline_stats"):
+        loader.pipeline_stats["rows_after_source_id_resume"] = len(rows)
+
+    # Content-hash dedup. Catches the case where the upstream dataset
+    # ships the same article under multiple row IDs (HuggingFace mirrors,
+    # syndicated news, etc.) — source-ID dedup is blind to it because
+    # the IDs differ. Skipped on dry-run (no point spending compute on a
+    # filter we won't use) and when the loader didn't surface a known-
+    # hashes set (warm-resume path with no WP bulk fetch).
+    transform_cfg_for_body = cfg.get("transform") or {}
+    body_field = str(transform_cfg_for_body.get("body_field") or "body")
+    dedup_enabled = bool(dataset_cfg.get("dedup_content", True))
+    if dedup_enabled and not loader.dry_run:
+        known_hashes = dict(getattr(loader, "existing_content_hashes", {}) or {})
+        deduped: list[RawRow] = []
+        seen_in_run: set[str] = set()
+        cross_run = 0
+        in_run = 0
+        empty_hash = 0
+        for r in rows:
+            body = r.fields.get(body_field, "")
+            h = content_hash_for(body)
+            r.content_hash = h
+            if not h:
+                empty_hash += 1
+                deduped.append(r)
+                continue
+            if h in known_hashes:
+                cross_run += 1
+                continue
+            if h in seen_in_run:
+                in_run += 1
+                continue
+            seen_in_run.add(h)
+            deduped.append(r)
+        # Warn when content dedup is enabled but no row produced a usable
+        # hash. Almost always means `transform.body_field` is misconfigured
+        # (typo, wrong logical name) and dedup is silently a no-op.
+        if rows and empty_hash >= len(rows):
+            log.warning(
+                "Content-hash dedup: all %d rows hashed to empty using body_field=%r. "
+                "Dedup will not run. Check that the source `field_map` exposes %r "
+                "and that the body column maps to it.",
+                len(rows),
+                body_field,
+                body_field,
+            )
+        elif rows and empty_hash * 2 >= len(rows):
+            log.warning(
+                "Content-hash dedup: %d / %d rows hashed to empty using body_field=%r. "
+                "Dedup coverage will be partial; consider checking the source field_map.",
+                empty_hash,
+                len(rows),
+                body_field,
+            )
+        if cross_run or in_run:
+            log.info(
+                "Content-hash dedup: skipped %d cross-run + %d within-run duplicates "
+                "(processing %d / %d after filter)",
+                cross_run,
+                in_run,
+                len(deduped),
+                len(rows),
+            )
+        if hasattr(loader, "dedup_stats"):
+            loader.dedup_stats["cross_run"] += cross_run
+            loader.dedup_stats["within_run"] += in_run
+            loader.dedup_stats["empty_hash"] += empty_hash
+        rows = deduped
+    if hasattr(loader, "pipeline_stats"):
+        loader.pipeline_stats["rows_after_content_dedup"] = len(rows)
 
     prefabs = build_prefabs(rows, cfg)
 
@@ -137,8 +211,16 @@ def run_pipeline(
             cached = cache.get(pf.row.source_id) if cache is not None else None
             if cached is not None:
                 post = cached
+                # Pre-dedup cache entries lack content_hash; restore from
+                # the row so the loader can still write WP meta.
+                if not post.content_hash:
+                    post.content_hash = pf.row.content_hash
             else:
                 post = transformer.transform(pf.row, pf)
+                # Stamp content_hash on the Post before caching so the
+                # cache round-trip preserves it. Transformers don't need
+                # to know about it; it's a source-side property.
+                post.content_hash = pf.row.content_hash
                 if cache is not None:
                     cache.put(post)
             record_post(post)

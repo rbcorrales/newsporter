@@ -97,6 +97,8 @@ def _estimate_embedding_cost(posts: list[Post], costs_cfg: dict) -> dict:
 def _write_summary(
     run_dir: Path,
     cfg: dict,
+    dedup_stats: dict[str, int] | None,
+    pipeline_stats: dict[str, int] | None,
     posts: list[Post],
     results: list[dict],
     elapsed_sec: float,
@@ -115,7 +117,15 @@ def _write_summary(
         "wordpress_url": (cfg.get("wordpress") or {}).get("url"),
         "dry_run": bool((cfg.get("load") or {}).get("dry_run")),
         "sample_size_requested": (cfg.get("dataset") or {}).get("sample_size"),
-        "rows_fetched": len(posts) + sum(1 for r in results if r.get("ok") is False),
+        # Prefer the loader-tracked fetch count when available (true count
+        # from `source.fetch()` pre-filter). Fall back to the derived
+        # post-filter count for compatibility when the loader didn't track it
+        # (older entry points, test stubs).
+        "rows_fetched": (
+            int(pipeline_stats["rows_fetched"])
+            if pipeline_stats and pipeline_stats.get("rows_fetched")
+            else len(posts) + sum(1 for r in results if r.get("ok") is False)
+        ),
         "posts_prepared": len(posts),
         "posts_uploaded": sum(1 for r in results if r.get("ok") and not r.get("dry_run")),
         "posts_skipped_existing": sum(1 for r in results if r.get("skipped")),
@@ -132,6 +142,27 @@ def _write_summary(
         summary["embedding_estimate"] = embedding_estimate
     if cache_stats is not None:
         summary["cache"] = cache_stats
+    if dedup_stats and any(dedup_stats.values()):
+        # Three counters: rows skipped because their content was already
+        # in WP / the local log (cross_run), rows skipped because an
+        # earlier row in the same fetch had the same content (within_run),
+        # and rows whose body_field hashed to empty so dedup was a no-op
+        # (empty_hash). Useful for detecting both real upstream dupes
+        # and silently-misconfigured body fields.
+        summary["content_dedup"] = {
+            "cross_run": int(dedup_stats.get("cross_run", 0)),
+            "within_run": int(dedup_stats.get("within_run", 0)),
+            "empty_hash": int(dedup_stats.get("empty_hash", 0)),
+        }
+    if pipeline_stats and pipeline_stats.get("rows_fetched"):
+        # Funnel breakdown so the gap between `rows_fetched` and
+        # `posts_prepared` is auditable (source-ID resume vs content
+        # dedup vs failures during transform/upload).
+        summary["rows_funnel"] = {
+            "fetched": int(pipeline_stats.get("rows_fetched", 0)),
+            "after_source_id_resume": int(pipeline_stats.get("rows_after_source_id_resume", 0)),
+            "after_content_dedup": int(pipeline_stats.get("rows_after_content_dedup", 0)),
+        }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     return summary
 
@@ -408,6 +439,8 @@ def main() -> int:
     summary = _write_summary(
         run_dir,
         cfg,
+        getattr(loader, "dedup_stats", None),
+        getattr(loader, "pipeline_stats", None),
         posts,
         results,
         elapsed,

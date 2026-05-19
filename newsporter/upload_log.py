@@ -55,7 +55,7 @@ class UploadLog:
                     continue
                 sid = entry.get("source_id")
                 pid = entry.get("post_id")
-                if sid and isinstance(pid, int):
+                if sid is not None and sid != "" and isinstance(pid, int) and pid > 0:
                     self._by_source[str(sid)] = pid
                     loaded += 1
                 chash = entry.get("content_hash")

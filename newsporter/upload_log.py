@@ -59,16 +59,13 @@ class UploadLog:
                     self._by_source[str(sid)] = pid
                     loaded += 1
                 chash = entry.get("content_hash")
-                # setdefault: first-seen post wins as the canonical id for
-                # this content. Mirrors the loader's setdefault on
-                # `existing_content_hashes` during live uploads. Short-circuit
-                # the and-chain so setdefault doesn't fire on invalid rows.
-                if (
-                    chash
-                    and isinstance(pid, int)
-                    and pid > 0
-                    and self._by_hash.setdefault(str(chash), pid) == pid
-                ):
+                # First-seen post wins as the canonical id for this content,
+                # mirroring the loader's setdefault during live uploads. Gate
+                # on key-absence so an append-only log with repeated lines for
+                # the same hash counts each unique hash once, not per line.
+                key = str(chash) if chash else ""
+                if key and isinstance(pid, int) and pid > 0 and key not in self._by_hash:
+                    self._by_hash[key] = pid
                     hashes_loaded += 1
         self.log.info(
             "Upload log: %d previously-uploaded rows loaded from %s (%d with content hash)",

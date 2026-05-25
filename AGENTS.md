@@ -23,16 +23,17 @@ The principle: **a preset describes a dataset; a config describes an environment
 
 ## Idempotency contract (layered)
 
-Three independent layers, each catches different failure modes:
+Four independent layers, each catches different failure modes:
 
 1. **WP server-side meta** (`_newsporter_source_id`). Requires `tools/newsporter-meta.php` in `wp-content/mu-plugins/`. Without it, the meta is silently dropped on every POST and idempotency is local-only. The `auth_callback` is `manage_options` (admin-only), so the user uploading via REST must have admin caps for the meta to be writable.
 2. **Local upload log** (`data/uploads.jsonl`). Append-only JSONL of `{source_id, post_id}`. Read at startup → in-memory dict → pipeline filters those rows before transform. A 99k-of-100k resume costs a single local-disk read instead of 99k REST roundtrips.
 3. **Pre-create lookup on retry**. If a `create_post` retry fires after a `ConnectionError`/`Timeout`, the loader does a single `find_post_id_by_source_id` to detect a server-side success whose response we lost. Closes the duplicate-on-network-blip window.
+4. **Content-hash dedup** (`_newsporter_content_hash`). Catches the case where the upstream dataset ships the same article under multiple source IDs (HuggingFace mirrors, syndicated news, etc.). Source-ID dedup is blind to that because the IDs differ. The hash is MD5 of the raw source body post-strip; the pipeline computes it after fetch, the loader writes it both as post meta on WP and as an optional `content_hash` field on each `data/uploads.jsonl` line. Bulk fetch via `list_metas()` rebuilds the index from WP; warm resume from the local log reads it via `UploadLog.all_hashes()`. Either path keeps cross-run dedup live, so warm resume after an interrupted run still catches duplicates landed in the previous batch. Disable with `dataset.dedup_content: false`.
 
 Authority order on resume:
 
 - Local log is trusted by default.
-- `--verify-with-wp` does a bulk WP fetch via `list_source_ids`, REPLACES the local log with WP's authoritative state, and reports drift counts (`only_in_log`, `only_on_wp`, `differing_post_ids`) to `run.log`. Use after wp-admin deletions or cross-machine handoffs.
+- `--verify-with-wp` does a bulk WP fetch via `list_metas`, REPLACES the local log with WP's authoritative state, and reports drift counts (`only_in_log`, `only_on_wp`, `differing_post_ids`) to `run.log`. Use after wp-admin deletions or cross-machine handoffs.
 - `--purge` deletes all posts on the WP site AND truncates the local upload log so the next run is consistent.
 - `--no-resume-check` skips both paths (force-fresh upload).
 

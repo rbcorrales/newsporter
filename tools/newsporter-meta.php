@@ -1,9 +1,9 @@
 <?php
 /**
  * Plugin Name: Newsporter source-id meta
- * Description: Registers `_newsporter_source_id` and `_newsporter_byline` post meta with REST visibility, so newsporter can look up posts by their source-corpus id and skip re-creating them on retry / re-run.
+ * Description: Registers `_newsporter_source_id`, `_newsporter_byline`, and `_newsporter_content_hash` post meta with REST visibility, so newsporter can look up posts by their source-corpus id (and now also by content hash) and skip re-creating them on retry / re-run.
  * Author: Newsporter
- * Version: 0.2.0
+ * Version: 0.3.0
  *
  * Drop in `wp-content/mu-plugins/` on the target WordPress site.
  *
@@ -35,6 +35,14 @@ add_action('init', function () {
     register_post_meta('post', '_newsporter_byline', [
         'type'              => 'string',
         'description'       => 'Synthesized author name (display only).',
+        'single'            => true,
+        'show_in_rest'      => true,
+        'auth_callback'     => $auth,
+        'sanitize_callback' => 'sanitize_text_field',
+    ]);
+    register_post_meta('post', '_newsporter_content_hash', [
+        'type'              => 'string',
+        'description'       => 'Hex digest of the raw source body, used to detect upstream datasets that ship the same article under multiple row IDs.',
         'single'            => true,
         'show_in_rest'      => true,
         'auth_callback'     => $auth,

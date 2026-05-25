@@ -14,10 +14,16 @@ class RawRow:
     surface different schemas (e.g. one dataset has `article` + `highlights`,
     a WordPress export has `title` + `content` + `tags`). Transformers pull
     the fields they need by name via the source's `field_map` config.
+
+    `content_hash` is filled by the pipeline after fetch (hash of the raw
+    source body via `dedup.content_hash_for`) and is used to drop rows
+    whose content was already ingested under a different `source_id`. It
+    stays "" if the body field is missing or empty.
     """
 
     source_id: str
     fields: dict[str, str] = field(default_factory=dict)
+    content_hash: str = ""
 
 
 @dataclass
@@ -45,3 +51,4 @@ class Post:
     author: str
     date_gmt: str
     source_id: str
+    content_hash: str = ""
